@@ -612,10 +612,10 @@ export default function App() {
           <div className="p-5 sm:p-6 space-y-4 overflow-y-auto">
             <div className="space-y-1">
               <h1 className="text-2xl font-serif font-medium tracking-tight text-stone-900">
-                Hari ini kita mau ke mana?
+                Wishlist Kita
               </h1>
               <p className="text-xs text-stone-500 leading-relaxed">
-                Tulis daftar tempat, makanan, atau aktivitas yang pengen kita lakuin bareng, {HER_NAME}.
+                Tulis daftar tempat, makanan, atau aktivitas yang pengen kita lakuin bareng.
               </p>
             </div>
 
@@ -624,7 +624,7 @@ export default function App() {
                 type="text"
                 value={wishTitle}
                 onChange={(e) => setWishTitle(e.target.value)}
-                placeholder="Tulis wishlist... (misal: Ngopi di Cikini / Makan Ramen)"
+                placeholder="Tulis wishlist..."
                 className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-stone-200 focus:outline-none focus:border-stone-900 bg-stone-50/50 placeholder:text-stone-400"
               />
               {wishTitle.trim().length > 0 && (
