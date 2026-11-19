@@ -24,7 +24,9 @@ import {
   KeyRound,
   Delete,
   ZoomIn,
+  Loader2,
 } from 'lucide-react';
+import { supabase } from './supabaseClient';
 
 type TabType = 'wishlist' | 'memori' | 'love';
 
@@ -33,13 +35,16 @@ interface WishlistItem {
   title: string;
   note: string;
   done: boolean;
+  created_at?: string;
 }
 
 interface MemoryPhoto {
   id: string;
-  imageUrl: string;
+  image_url: string;
+  storage_path: string;
   caption: string;
-  date: string;
+  date_label: string;
+  created_at?: string;
 }
 
 interface SongItem {
@@ -96,55 +101,132 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<TabType>('wishlist');
 
+  // Set judul tab browser
+  useEffect(() => {
+    document.title = 'Dating';
+  }, []);
+
   // ==========================================
-  // STATE 1: WISHLIST
+  // STATE 1: WISHLIST (SUPABASE REALTIME)
   // ==========================================
-  const [wishlists, setWishlists] = useState<WishlistItem[]>(() => {
-    const saved = localStorage.getItem('couple_app_wishlists');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [wishlists, setWishlists] = useState<WishlistItem[]>([]);
+  const [loadingWishlist, setLoadingWishlist] = useState<boolean>(true);
+  const [savingWishlist, setSavingWishlist] = useState<boolean>(false);
   const [wishTitle, setWishTitle] = useState('');
   const [wishNote, setWishNote] = useState('');
 
+  const fetchWishlists = async () => {
+    const { data, error } = await supabase
+      .from('wishlists')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      setWishlists(data as WishlistItem[]);
+    }
+    setLoadingWishlist(false);
+  };
+
   useEffect(() => {
-    localStorage.setItem('couple_app_wishlists', JSON.stringify(wishlists));
-  }, [wishlists]);
+    fetchWishlists();
 
-  const handleAddWishlist = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!wishTitle.trim()) return;
-    const newItem: WishlistItem = {
-      id: `wish-${Date.now()}`,
-      title: wishTitle.trim(),
-      note: wishNote.trim(),
-      done: false,
+    const channel = supabase
+      .channel('realtime-wishlists')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'wishlists' },
+        () => {
+          fetchWishlists();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
     };
-    setWishlists((prev) => [newItem, ...prev]);
-    setWishTitle('');
-    setWishNote('');
+  }, []);
+
+  const handleAddWishlist = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!wishTitle.trim() || savingWishlist) return;
+    setSavingWishlist(true);
+
+    const { error } = await supabase.from('wishlists').insert([
+      {
+        title: wishTitle.trim(),
+        note: wishNote.trim(),
+        done: false,
+      },
+    ]);
+
+    if (!error) {
+      setWishTitle('');
+      setWishNote('');
+      await fetchWishlists();
+    } else {
+      alert(`Gagal menyimpan wishlist: ${error.message}`);
+    }
+    setSavingWishlist(false);
   };
 
-  const toggleWishlistDone = (id: string) => {
+  const toggleWishlistDone = async (item: WishlistItem) => {
     setWishlists((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, done: !item.done } : item))
+      prev.map((w) => (w.id === item.id ? { ...w, done: !w.done } : w))
     );
+
+    await supabase
+      .from('wishlists')
+      .update({ done: !item.done })
+      .eq('id', item.id);
   };
 
-  const deleteWishlist = (id: string) => {
+  const deleteWishlist = async (id: string) => {
     setWishlists((prev) => prev.filter((item) => item.id !== id));
+    await supabase.from('wishlists').delete().eq('id', id);
   };
 
   // ==========================================
-  // STATE 2: MEMORI (SLIDESHOW + LONG PRESS ZOOM)
+  // STATE 2: MEMORI (SUPABASE STORAGE + REALTIME)
   // ==========================================
-  const [memories, setMemories] = useState<MemoryPhoto[]>(() => {
-    const saved = localStorage.getItem('couple_app_memories');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [memories, setMemories] = useState<MemoryPhoto[]>([]);
+  const [loadingMemories, setLoadingMemories] = useState<boolean>(true);
+  const [uploadingPhoto, setUploadingPhoto] = useState<boolean>(false);
   const [photoCaption, setPhotoCaption] = useState('');
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const fetchMemories = async () => {
+    const { data, error } = await supabase
+      .from('memories')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (!error && data) {
+      setMemories(data as MemoryPhoto[]);
+      setCurrentSlide((prev) => (data.length === 0 ? 0 : Math.min(prev, data.length - 1)));
+    }
+    setLoadingMemories(false);
+  };
+
+  useEffect(() => {
+    fetchMemories();
+
+    const channel = supabase
+      .channel('realtime-memories')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'memories' },
+        () => {
+          fetchMemories();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // State Long-Press Zoom
   const [isZoomed, setIsZoomed] = useState(false);
@@ -162,7 +244,7 @@ export default function App() {
     if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
     longPressTimerRef.current = window.setTimeout(() => {
       setIsZoomed(true);
-    }, 220); // Tahan 220ms untuk mengaktifkan zoom
+    }, 220);
   };
 
   const cancelLongPress = () => {
@@ -270,15 +352,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    try {
-      localStorage.setItem('couple_app_memories', JSON.stringify(memories));
-    } catch {
-      alert('Kapasitas penyimpanan browser penuh. Hapus beberapa foto lama terlebih dahulu.');
-    }
-  }, [memories]);
-
-  // Jeda auto-slide saat foto sedang di-zoom (long press)
-  useEffect(() => {
     if (activeTab !== 'memori' || !isPlaying || isZoomed || memories.length <= 1) return;
     const timer = setInterval(() => {
       setCurrentSlide((prev) => (prev + 1) % memories.length);
@@ -286,21 +359,27 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeTab, isPlaying, isZoomed, memories.length]);
 
-  const compressImage = (file: File): Promise<string> => {
+  const compressImageToBlob = (file: File): Promise<Blob> => {
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 1080;
+          const MAX_WIDTH = 1200;
           const scaleSize = MAX_WIDTH / img.width;
           canvas.width = img.width > MAX_WIDTH ? MAX_WIDTH : img.width;
           canvas.height = img.width > MAX_WIDTH ? img.height * scaleSize : img.height;
 
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', 0.82));
+          canvas.toBlob(
+            (blob) => {
+              resolve(blob || file);
+            },
+            'image/jpeg',
+            0.82
+          );
         };
         img.src = event.target?.result as string;
       };
@@ -310,37 +389,72 @@ export default function App() {
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0 || uploadingPhoto) return;
 
-    const uploadedItems: MemoryPhoto[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const compressedBase64 = await compressImage(files[i]);
-      uploadedItems.push({
-        id: `mem-${Date.now()}-${i}`,
-        imageUrl: compressedBase64,
-        caption: photoCaption.trim() || `Momen #${memories.length + i + 1}`,
-        date: new Date().toLocaleDateString('id-ID', {
+    setUploadingPhoto(true);
+    const startIdx = memories.length;
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const compressedBlob = await compressImageToBlob(files[i]);
+        const fileName = `${Date.now()}-${i}-${Math.random().toString(36).substring(2, 8)}.jpg`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('memories')
+          .upload(fileName, compressedBlob, {
+            contentType: 'image/jpeg',
+            upsert: false,
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('memories')
+          .getPublicUrl(fileName);
+
+        const dateLabel = new Date().toLocaleDateString('id-ID', {
           day: 'numeric',
           month: 'short',
           year: 'numeric',
-        }),
-      });
-    }
+        });
 
-    setMemories((prev) => [...prev, ...uploadedItems]);
-    setPhotoCaption('');
-    setCurrentSlide(memories.length);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+        const { error: dbError } = await supabase.from('memories').insert([
+          {
+            image_url: urlData.publicUrl,
+            storage_path: fileName,
+            caption: photoCaption.trim() || `Momen #${startIdx + i + 1}`,
+            date_label: dateLabel,
+          },
+        ]);
+
+        if (dbError) throw dbError;
+      }
+
+      setPhotoCaption('');
+      await fetchMemories();
+      setCurrentSlide(startIdx);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Gagal mengunggah foto: ${err?.message || 'Periksa konfigurasi Supabase.'}`);
+    } finally {
+      setUploadingPhoto(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
-  const handleDeleteMemory = (id: string) => {
+  const handleDeleteMemory = async (memory: MemoryPhoto) => {
     setMemories((prev) => {
-      const updated = prev.filter((m) => m.id !== id);
+      const updated = prev.filter((m) => m.id !== memory.id);
       if (currentSlide >= updated.length) {
         setCurrentSlide(Math.max(0, updated.length - 1));
       }
       return updated;
     });
+
+    if (memory.storage_path) {
+      await supabase.storage.from('memories').remove([memory.storage_path]);
+    }
+    await supabase.from('memories').delete().eq('id', memory.id);
   };
 
   // ==========================================
@@ -417,7 +531,6 @@ export default function App() {
 
   return (
     <div className="h-dvh w-full overflow-hidden bg-[#FAF9F6] text-stone-900 flex flex-col items-center justify-center p-3 sm:p-4 font-sans selection:bg-stone-900 selection:text-white">
-      {/* Elemen Audio dengan Auto-Next saat lagu berakhir */}
       <audio
         ref={audioRef}
         src={currentSong?.url}
@@ -499,10 +612,10 @@ export default function App() {
           <div className="p-5 sm:p-6 space-y-4 overflow-y-auto">
             <div className="space-y-1">
               <h1 className="text-2xl font-serif font-medium tracking-tight text-stone-900">
-                Wishlist Kita
+                Hari ini kita mau ke mana?
               </h1>
               <p className="text-xs text-stone-500 leading-relaxed">
-                Tempat yang ingin aku datangi sama, {HER_NAME}.
+                Tulis daftar tempat, makanan, atau aktivitas yang pengen kita lakuin bareng, {HER_NAME}.
               </p>
             </div>
 
@@ -511,7 +624,7 @@ export default function App() {
                 type="text"
                 value={wishTitle}
                 onChange={(e) => setWishTitle(e.target.value)}
-                placeholder="Tulis wishlist..."
+                placeholder="Tulis wishlist... (misal: Ngopi di Cikini / Makan Ramen)"
                 className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-stone-200 focus:outline-none focus:border-stone-900 bg-stone-50/50 placeholder:text-stone-400"
               />
               {wishTitle.trim().length > 0 && (
@@ -525,16 +638,30 @@ export default function App() {
               )}
               <button
                 type="submit"
-                disabled={!wishTitle.trim()}
+                disabled={!wishTitle.trim() || savingWishlist}
                 className="w-full py-2.5 px-4 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
               >
-                <Plus className="w-4 h-4" />
-                <span>Simpan ke Wishlist</span>
+                {savingWishlist ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Menyimpan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4" />
+                    <span>Simpan ke Wishlist</span>
+                  </>
+                )}
               </button>
             </form>
 
             <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1 pt-1">
-              {wishlists.length === 0 ? (
+              {loadingWishlist ? (
+                <div className="text-center py-8 text-xs text-stone-400 flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Memuat wishlist...</span>
+                </div>
+              ) : wishlists.length === 0 ? (
                 <div className="text-center py-8 border border-dashed border-stone-200 rounded-xl text-xs text-stone-400">
                   Belum ada wishlist tersimpan. Yuk isi satu dulu di atas!
                 </div>
@@ -550,7 +677,7 @@ export default function App() {
                   >
                     <button
                       type="button"
-                      onClick={() => toggleWishlistDone(item.id)}
+                      onClick={() => toggleWishlistDone(item)}
                       className="mt-0.5 text-stone-700 hover:text-stone-900 cursor-pointer shrink-0"
                     >
                       {item.done ? (
@@ -713,7 +840,12 @@ export default function App() {
             </div>
 
             {/* Area Slideshow Kotak Tetap (Ada hitam/blur kiri-kanan + Long Press Zoom) */}
-            {memories.length > 0 ? (
+            {loadingMemories ? (
+              <div className="aspect-[4/3] w-full rounded-xl border border-stone-200 bg-stone-50 flex items-center justify-center gap-2 text-xs text-stone-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Memuat galeri memori...</span>
+              </div>
+            ) : memories.length > 0 ? (
               <div className="space-y-2">
                 <div
                   onMouseDown={(e) => {
@@ -743,7 +875,6 @@ export default function App() {
                   onContextMenu={(e) => e.preventDefault()}
                   className="relative aspect-[4/3] w-full rounded-xl overflow-hidden bg-stone-950 border border-stone-200 select-none touch-none cursor-zoom-in"
                 >
-                  {/* Stack semua gambar dengan transisi cross-fade + latar gelap kiri-kanan */}
                   {memories.map((memory, idx) => {
                     const isActive = idx === currentSlide;
                     return (
@@ -753,18 +884,16 @@ export default function App() {
                           isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
                         }`}
                       >
-                        {/* Latar Belakang Gelap Blur Sisi Kiri-Kanan */}
                         <img
-                          src={memory.imageUrl}
+                          src={memory.image_url}
                           alt=""
                           aria-hidden="true"
                           draggable={false}
                           className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-40 pointer-events-none"
                         />
 
-                        {/* Foto Utama Utuh (object-contain) + Efek Zoom saat ditekan lama */}
                         <img
-                          src={memory.imageUrl}
+                          src={memory.image_url}
                           alt={memory.caption}
                           draggable={false}
                           style={{
@@ -777,7 +906,6 @@ export default function App() {
                     );
                   })}
 
-                  {/* Badge Indikator Zoom di Kiri Atas */}
                   <div
                     className={`absolute top-2.5 left-2.5 z-20 px-2 py-1 rounded-lg bg-black/50 text-white text-[10px] font-medium flex items-center gap-1 pointer-events-none transition-opacity ${
                       isZoomed ? 'opacity-100 bg-stone-900/90' : 'opacity-75'
@@ -787,7 +915,6 @@ export default function App() {
                     <span>{isZoomed ? 'Zoom Aktif (Geser untuk lihat)' : 'Tahan untuk zoom'}</span>
                   </div>
 
-                  {/* Gradient Overlay & Caption (sembunyikan saat zoom agar gambar bersih) */}
                   <div
                     className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/85 via-black/45 to-transparent p-3.5 text-white pointer-events-none transition-opacity duration-200 ${
                       isZoomed ? 'opacity-0' : 'opacity-100'
@@ -797,11 +924,10 @@ export default function App() {
                       {memories[currentSlide]?.caption}
                     </div>
                     <div className="text-[11px] text-stone-300 font-mono mt-0.5">
-                      {memories[currentSlide]?.date} · {currentSlide + 1} / {memories.length}
+                      {memories[currentSlide]?.date_label} · {currentSlide + 1} / {memories.length}
                     </div>
                   </div>
 
-                  {/* Kontrol Navigasi Slide */}
                   {memories.length > 1 && !isZoomed && (
                     <>
                       <button
@@ -827,7 +953,6 @@ export default function App() {
                     </>
                   )}
 
-                  {/* Tombol Play/Pause Slideshow & Hapus Foto */}
                   {!isZoomed && (
                     <div
                       onMouseDown={(e) => e.stopPropagation()}
@@ -846,7 +971,7 @@ export default function App() {
                       )}
                       <button
                         type="button"
-                        onClick={() => handleDeleteMemory(memories[currentSlide].id)}
+                        onClick={() => handleDeleteMemory(memories[currentSlide])}
                         title="Hapus foto ini"
                         className="p-1.5 rounded-lg bg-black/50 text-white hover:bg-red-600 transition-colors cursor-pointer"
                       >
@@ -856,7 +981,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Indikator Dots */}
                 {memories.length > 1 && (
                   <div className="flex justify-center gap-1.5 pt-0.5">
                     {memories.map((m, idx) => (
@@ -887,7 +1011,8 @@ export default function App() {
                 value={photoCaption}
                 onChange={(e) => setPhotoCaption(e.target.value)}
                 placeholder="Tulis caption foto sebelum upload (opsional)..."
-                className="w-full px-3.5 py-2 text-xs rounded-xl border border-stone-200 focus:outline-none focus:border-stone-900 bg-stone-50/50 placeholder:text-stone-400"
+                disabled={uploadingPhoto}
+                className="w-full px-3.5 py-2 text-xs rounded-xl border border-stone-200 focus:outline-none focus:border-stone-900 bg-stone-50/50 placeholder:text-stone-400 disabled:opacity-60"
               />
               <input
                 ref={fileInputRef}
@@ -899,11 +1024,21 @@ export default function App() {
               />
               <button
                 type="button"
+                disabled={uploadingPhoto}
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full py-2.5 px-4 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800 transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-2.5 px-4 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800 disabled:bg-stone-400 transition-colors inline-flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
               >
-                <Upload className="w-4 h-4" />
-                <span>Upload Foto ke Memori</span>
+                {uploadingPhoto ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Mengunggah ke Cloud...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    <span>Upload Foto ke Memori</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
