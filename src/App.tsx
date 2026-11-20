@@ -76,12 +76,12 @@ const DEFAULT_PLAYLIST: SongItem[] = [
   {
     id: 'song-2',
     title: 'Komang - Raim Laode',
-    url: '/Komang-RaimLaode.mp3',
+    url: '/KOMANG-RaimLaode.mp3',
   },
   {
     id: 'song-3',
     title: 'Penjaga Hati - Nadhif Basalamah',
-    url: '/PenjagaHati-NadhifBasalamah.mp3',
+    url: '/nadhifbasalamah-penjagahati.mp3',
   },
 ];
 
