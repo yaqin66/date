@@ -25,10 +25,11 @@ import {
   Delete,
   ZoomIn,
   Loader2,
+  Quote,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
-type TabType = 'wishlist' | 'memori' | 'love';
+type TabType = 'wishlist' | 'memori' | 'quotes' | 'love';
 
 interface WishlistItem {
   id: string;
@@ -52,6 +53,13 @@ interface SongItem {
   title: string;
   url: string;
   isBlob?: boolean;
+}
+
+interface QuoteItem {
+  id: string;
+  text: string;
+  author: string;
+  created_at: string;
 }
 
 const NO_PHRASES = [
@@ -359,6 +367,73 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeTab, isPlaying, isZoomed, memories.length]);
 
+  // ==========================================
+  // STATE 3: QUOTES (SUPABASE REALTIME)
+  // ==========================================
+  const [quotes, setQuotes] = useState<QuoteItem[]>([]);
+  const [loadingQuotes, setLoadingQuotes] = useState(true);
+  const [savingQuote, setSavingQuote] = useState(false);
+  const [quoteText, setQuoteText] = useState('');
+  const [quoteAuthor, setQuoteAuthor] = useState('');
+
+  const fetchQuotes = async () => {
+    const { data, error } = await supabase
+      .from('quotes')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      setQuotes(data as QuoteItem[]);
+    }
+    setLoadingQuotes(false);
+  };
+
+  useEffect(() => {
+    fetchQuotes();
+
+    const channel = supabase
+      .channel('realtime-quotes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'quotes' },
+        () => {
+          fetchQuotes();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const handleAddQuote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quoteText.trim() || savingQuote) return;
+    setSavingQuote(true);
+
+    const { error } = await supabase.from('quotes').insert([
+      {
+        text: quoteText.trim(),
+        author: quoteAuthor.trim(),
+      },
+    ]);
+
+    if (!error) {
+      setQuoteText('');
+      setQuoteAuthor('');
+      await fetchQuotes();
+    } else {
+      alert(`Gagal menyimpan quote: ${error.message}`);
+    }
+    setSavingQuote(false);
+  };
+
+  const handleDeleteQuote = async (id: string) => {
+    setQuotes((prev) => prev.filter((quote) => quote.id !== id));
+    await supabase.from('quotes').delete().eq('id', id);
+  };
+
   const compressImageToBlob = (file: File): Promise<Blob> => {
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -544,9 +619,9 @@ export default function App() {
 
       <div className="w-full max-w-md max-h-full bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden flex flex-col">
         {/* ========================================== */}
-        {/* NAVBAR 3 MENU (Wishlist, Memori, Love)     */}
+        {/* NAVBAR 4 MENU (Wishlist, Memori, Quotes, Love) */}
         {/* ========================================== */}
-        <nav className="grid grid-cols-3 border-b border-stone-200 bg-stone-50/70 p-1.5 gap-1 shrink-0">
+        <nav className="grid grid-cols-4 border-b border-stone-200 bg-stone-50/70 p-1.5 gap-1 shrink-0">
           <button
             type="button"
             onClick={() => setActiveTab('wishlist')}
@@ -579,6 +654,24 @@ export default function App() {
             {memories.length > 0 && (
               <span className="text-[10px] font-mono bg-stone-100 text-stone-700 px-1.5 py-0.2 rounded-full">
                 {memories.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('quotes')}
+            className={`py-2.5 px-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1 transition-all cursor-pointer ${
+              activeTab === 'quotes'
+                ? 'bg-white text-stone-900 shadow-xs border border-stone-200/80'
+                : 'text-stone-500 hover:text-stone-900'
+            }`}
+          >
+            <Quote className="w-4 h-4" />
+            <span>Quotes</span>
+            {quotes.length > 0 && (
+              <span className="text-[10px] font-mono bg-stone-100 text-stone-700 px-1 py-0.5 rounded-full">
+                {quotes.length}
               </span>
             )}
           </button>
@@ -1045,7 +1138,97 @@ export default function App() {
         )}
 
         {/* ========================================== */}
-        {/* KONTEN TAB 3: LOVE (PIN LOCK + NEMBAK)     */}
+        {/* KONTEN TAB 3: QUOTES                       */}
+        {/* ========================================== */}
+        {activeTab === 'quotes' && (
+          <div className="p-5 sm:p-6 space-y-4 overflow-y-auto">
+            <div className="space-y-1">
+              <h2 className="text-2xl font-serif font-medium tracking-tight text-stone-900">
+                Quotes Kita
+              </h2>
+              <p className="text-xs text-stone-500 leading-relaxed">
+                Simpan kata-kata, janji kecil, dan kalimat spesial untuk kita berdua.
+              </p>
+            </div>
+
+            <form onSubmit={handleAddQuote} className="space-y-2.5">
+              <textarea
+                value={quoteText}
+                onChange={(e) => setQuoteText(e.target.value)}
+                placeholder="Tulis quote atau pesan spesial..."
+                rows={3}
+                className="w-full resize-none px-3.5 py-2.5 text-sm rounded-xl border border-stone-200 focus:outline-none focus:border-stone-900 bg-stone-50/50 placeholder:text-stone-400"
+              />
+              {quoteText.trim().length > 0 && (
+                <input
+                  type="text"
+                  value={quoteAuthor}
+                  onChange={(e) => setQuoteAuthor(e.target.value)}
+                  placeholder="Nama atau sumber (opsional)"
+                  className="w-full px-3.5 py-2 text-xs rounded-xl border border-stone-200 focus:outline-none focus:border-stone-900 bg-stone-50/50 placeholder:text-stone-400"
+                />
+              )}
+              <button
+                type="submit"
+                disabled={!quoteText.trim() || savingQuote}
+                className="w-full py-2.5 px-4 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {savingQuote ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Menyimpan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4" />
+                    <span>Simpan Quote</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1 pt-1">
+              {loadingQuotes ? (
+                <div className="text-center py-8 text-xs text-stone-400 flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Memuat quotes...</span>
+                </div>
+              ) : quotes.length === 0 ? (
+                <div className="text-center py-8 border border-dashed border-stone-200 rounded-xl text-xs text-stone-400">
+                  Belum ada quote tersimpan. Tambahkan kalimat pertama kita!
+                </div>
+              ) : (
+                quotes.map((quote) => (
+                  <article
+                    key={quote.id}
+                    className="relative p-4 rounded-xl border border-stone-200 bg-stone-50/60 hover:border-stone-300 transition-colors"
+                  >
+                    <Quote className="w-5 h-5 text-stone-300 mb-2" />
+                    <p className="text-sm leading-relaxed text-stone-800 pr-7 whitespace-pre-wrap">
+                      {quote.text}
+                    </p>
+                    {quote.author && (
+                      <p className="mt-2 text-xs font-medium text-stone-500">
+                        — {quote.author}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteQuote(quote.id)}
+                      title="Hapus quote"
+                      className="absolute top-3 right-3 text-stone-300 hover:text-red-500 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ========================================== */}
+        {/* KONTEN TAB 4: LOVE (PIN LOCK + NEMBAK)     */}
         {/* ========================================== */}
         {activeTab === 'love' && (
           <div className="p-6 overflow-y-auto overflow-x-hidden">
